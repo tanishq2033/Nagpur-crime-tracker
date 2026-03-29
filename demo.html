@@ -1,0 +1,1004 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NAGPUR CRIME HEATMAP · Intelligence Dashboard</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;900&family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;1,300&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+
+  <style>
+    /* ── Reset & Base ─────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:       #08080f;
+      --panel:    rgba(9,9,17,0.92);
+      --border:   rgba(255,26,26,0.18);
+      --red:      #ff1a1a;
+      --amber:    #ff6b1a;
+      --gold:     #ffd700;
+      --purple:   #cc44ff;
+      --text:     #d0d0d8;
+      --dim:      #555566;
+      --font-d:   'Orbitron', sans-serif;
+      --font-m:   'IBM Plex Mono', monospace;
+      --font-b:   'DM Sans', sans-serif;
+    }
+
+    html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); }
+
+    #map {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      z-index: 0;
+      background: var(--bg);
+    }
+
+    /* Leaflet dark tile brightening */
+    .leaflet-tile-pane { filter: brightness(0.82) contrast(1.08) saturate(0.85); }
+
+    /* ── Scanline overlay ─────────────────────────────────── */
+    #scanline {
+      position: fixed; inset: 0; z-index: 5; pointer-events: none;
+      background: repeating-linear-gradient(
+        0deg, transparent, transparent 2px,
+        rgba(255,255,255,0.012) 2px, rgba(255,255,255,0.012) 4px
+      );
+    }
+
+    /* ── Glass panel mixin ────────────────────────────────── */
+    .glass {
+      background: var(--panel);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border: 1px solid var(--border);
+    }
+
+    /* ── Top bar ──────────────────────────────────────────── */
+    #topbar {
+      position: fixed; top: 0; left: 0; right: 0; height: 60px;
+      z-index: 1000;
+      display: flex; align-items: stretch;
+    }
+
+    #logo-area {
+      display: flex; align-items: center; gap: 12px;
+      padding: 0 20px;
+      min-width: 270px;
+      border-right: 1px solid rgba(255,26,26,0.12);
+    }
+    .radar-wrap {
+      position: relative; width: 32px; height: 32px; flex-shrink: 0;
+    }
+    .radar-ring {
+      position: absolute; inset: 0; border-radius: 50%;
+      border: 1px solid rgba(255,26,26,0.35);
+    }
+    .radar-ring:nth-child(2) { inset: 4px; border-color: rgba(255,26,26,0.18); }
+    .radar-dot {
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    }
+    .radar-dot::after {
+      content: '';
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--red);
+      box-shadow: 0 0 8px 2px rgba(255,26,26,0.7);
+      animation: livePulse 1.4s ease-in-out infinite;
+    }
+    .radar-ping {
+      position: absolute; inset: 0; border-radius: 50%;
+      border: 1px solid rgba(255,26,26,0.5);
+      animation: radarPing 1.6s ease-out infinite;
+    }
+    .logo-sub { font: 600 9px/1 var(--font-d); letter-spacing: .28em; color: var(--red); text-shadow: 0 0 10px rgba(255,26,26,.6); }
+    .logo-main { font: 700 16px/1.2 var(--font-d); letter-spacing: .14em; color: #fff; margin-top: 2px; }
+    .logo-main span { color: var(--red); }
+
+    #stats-area {
+      flex: 1; display: flex; align-items: center; justify-content: center; gap: 28px; padding: 0 24px;
+    }
+    .stat-badge { text-align: center; }
+    .stat-label { font: 400 8px/1 var(--font-m); letter-spacing: .22em; color: var(--dim); text-transform: uppercase; margin-bottom: 3px; }
+    .stat-value { font: 700 17px/1 var(--font-d); }
+    .stat-value.red   { color: var(--red);   text-shadow: 0 0 10px rgba(255,26,26,.6); }
+    .stat-value.amber { color: #ffaa44;       text-shadow: 0 0 10px rgba(255,160,40,.5); }
+    .stat-value.gold  { color: var(--gold);   text-shadow: 0 0 10px rgba(255,215,0,.4); }
+    .vdiv { width: 1px; height: 28px; background: rgba(255,26,26,0.15); flex-shrink: 0; }
+
+    #live-btn {
+      display: flex; align-items: center; gap: 7px;
+      padding: 5px 12px; border-radius: 3px;
+      font: 400 9px/1 var(--font-m); letter-spacing: .18em;
+      border: 1px solid rgba(255,26,26,.45);
+      background: rgba(255,26,26,.08);
+      color: #ff7777; cursor: pointer; transition: all .25s;
+      white-space: nowrap;
+    }
+    #live-btn.off { border-color: rgba(255,255,255,.1); background: transparent; color: var(--dim); }
+    #live-btn.off .live-dot { background: #444; box-shadow: none; animation: none; }
+    .live-dot {
+      width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+      background: var(--red); animation: livePulse 1.3s ease-in-out infinite;
+      box-shadow: 0 0 6px rgba(255,26,26,.8);
+    }
+
+    #clock-area {
+      display: flex; align-items: center; gap: 16px;
+      padding: 0 20px; border-left: 1px solid rgba(255,26,26,.12);
+    }
+    .time-filter-group { display: flex; gap: 5px; }
+    .tf-btn {
+      padding: 4px 10px; border-radius: 2px;
+      font: 400 9px/1 var(--font-m); letter-spacing: .18em;
+      border: 1px solid rgba(255,255,255,.08);
+      background: transparent; color: var(--dim);
+      cursor: pointer; transition: all .2s; white-space: nowrap;
+    }
+    .tf-btn.active { border-color: rgba(255,26,26,.5); background: rgba(255,26,26,.12); color: #ff8888; }
+    .clock { text-align: right; }
+    .clock-time { font: 400 13px/1 var(--font-m); letter-spacing: .15em; color: var(--red); text-shadow: 0 0 8px rgba(255,26,26,.5); }
+    .clock-date { font: 300 8px/1 var(--font-m); letter-spacing: .18em; color: var(--dim); margin-top: 3px; text-transform: uppercase; }
+
+    /* ── Left panel ───────────────────────────────────────── */
+    #left-panel {
+      position: fixed; top: 60px; left: 0; bottom: 0; width: 270px;
+      z-index: 900;
+      display: flex; flex-direction: column;
+      border-right: 1px solid var(--border);
+      transition: transform .4s cubic-bezier(.16,1,.3,1);
+    }
+    #left-panel.hidden { transform: translateX(-100%); }
+
+    .panel-header {
+      padding: 16px 20px 12px;
+      border-bottom: 1px solid rgba(255,26,26,.12);
+      flex-shrink: 0;
+    }
+    .panel-header-sub { font: 400 8px/1 var(--font-m); letter-spacing: .28em; color: rgba(255,26,26,.6); text-transform: uppercase; margin-bottom: 5px; }
+    .panel-header-title { font: 400 11px/1 var(--font-m); letter-spacing: .1em; color: #888; }
+
+    .panel-body { flex: 1; overflow-y: auto; padding: 16px 20px; }
+    .panel-body::-webkit-scrollbar { width: 3px; }
+    .panel-body::-webkit-scrollbar-thumb { background: rgba(255,26,26,.25); border-radius: 2px; }
+
+    .section-title {
+      font: 400 8px/1 var(--font-m); letter-spacing: .24em;
+      color: var(--dim); text-transform: uppercase;
+      margin-bottom: 10px; margin-top: 18px;
+    }
+    .section-title:first-child { margin-top: 0; }
+
+    /* Crime type buttons */
+    .crime-btn {
+      width: 100%; display: flex; align-items: center; gap: 10px;
+      padding: 9px 10px; border-radius: 3px;
+      border: 1px solid transparent; background: transparent;
+      cursor: pointer; transition: all .2s; margin-bottom: 4px;
+      text-align: left;
+    }
+    .crime-btn:hover { border-color: rgba(255,255,255,.07); background: rgba(255,255,255,.02); }
+    .crime-btn.active { border-color: rgba(255,26,26,.35); background: rgba(255,26,26,.08); }
+    .crime-btn .cb-icon { font-size: 14px; width: 18px; text-align: center; flex-shrink: 0; }
+    .crime-btn .cb-label { font: 400 10px/1 var(--font-m); letter-spacing: .15em; flex: 1; color: var(--dim); text-transform: uppercase; }
+    .crime-btn.active .cb-label { color: #ddd; }
+    .crime-btn .cb-count { font: 400 9px/1 var(--font-m); color: #444; }
+    .crime-btn .cb-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--red); flex-shrink: 0; }
+
+    /* Time buttons */
+    .time-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+    .time-card {
+      display: flex; flex-direction: column; align-items: center;
+      padding: 10px 6px; border-radius: 3px;
+      border: 1px solid rgba(255,255,255,.07); background: transparent;
+      cursor: pointer; transition: all .2s;
+    }
+    .time-card:hover { border-color: rgba(255,255,255,.15); }
+    .time-card.active { border-color: rgba(255,26,26,.45); background: rgba(255,26,26,.09); }
+    .time-card .tc-icon { font-size: 17px; margin-bottom: 5px; }
+    .time-card .tc-label { font: 400 8px/1 var(--font-m); letter-spacing: .18em; color: var(--dim); }
+    .time-card.active .tc-label { color: #cc7777; }
+
+    /* Area bars */
+    .area-row { margin-bottom: 10px; }
+    .area-row-header { display: flex; justify-content: space-between; margin-bottom: 3px; }
+    .area-name { font: 400 9px/1 var(--font-m); letter-spacing: .06em; color: #888; }
+    .area-count { font: 400 9px/1 var(--font-m); color: rgba(255,80,80,.7); }
+    .area-bar-track { height: 3px; background: #111122; border-radius: 2px; }
+    .area-bar-fill { height: 100%; border-radius: 2px; transition: width .6s cubic-bezier(.16,1,.3,1); }
+
+    /* Legend */
+    .legend-gradient {
+      height: 10px; border-radius: 3px;
+      background: linear-gradient(90deg, #0040ff, #00bbff, #00ffaa, #aaff00, #ffff00, #ff8800, #ff3300, #ff0000);
+      margin-bottom: 6px;
+    }
+    .legend-labels { display: flex; justify-content: space-between; font: 300 7px/1 var(--font-m); color: var(--dim); letter-spacing: .14em; }
+
+    .panel-footer {
+      padding: 10px 20px; border-top: 1px solid rgba(255,26,26,.1);
+      font: 300 7px/1 var(--font-m); letter-spacing: .18em; color: #2a2a3a; text-align: center;
+      flex-shrink: 0;
+    }
+
+    /* ── Bottom bar ───────────────────────────────────────── */
+    #bottombar {
+      position: fixed; bottom: 0; left: 0; right: 0; height: 46px;
+      z-index: 900;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 20px;
+      pointer-events: none;
+    }
+    #bottombar > * { pointer-events: auto; }
+
+    .bottom-info {
+      display: flex; align-items: center; gap: 12px;
+      padding: 7px 14px; border-radius: 3px;
+    }
+    .bottom-info-text { font: 400 9px/1 var(--font-m); letter-spacing: .15em; color: var(--dim); }
+    .bottom-info-text b { color: var(--red); }
+    .bottom-tip { font: 300 8px/1 var(--font-m); letter-spacing: .16em; color: #2a2a35; }
+
+    .bottom-actions { display: flex; gap: 8px; }
+    .btn-layers {
+      display: flex; align-items: center; gap: 6px;
+      padding: 7px 12px; border-radius: 3px;
+      font: 400 9px/1 var(--font-m); letter-spacing: .16em; color: var(--dim);
+      border: 1px solid rgba(255,255,255,.08); background: var(--panel);
+      cursor: pointer; transition: all .2s; backdrop-filter: blur(10px);
+    }
+    .btn-layers:hover { border-color: rgba(255,26,26,.3); color: #999; }
+    .btn-report {
+      display: flex; align-items: center; gap: 6px;
+      padding: 7px 16px; border-radius: 3px;
+      font: 400 9px/1 var(--font-m); letter-spacing: .16em; color: #ff8888;
+      border: 1px solid rgba(255,26,26,.4); background: rgba(255,26,26,.08);
+      cursor: pointer; transition: all .2s; backdrop-filter: blur(10px);
+    }
+    .btn-report:hover { background: rgba(255,26,26,.15); border-color: rgba(255,26,26,.6); }
+    .btn-report-icon { font-size: 11px; }
+
+    /* ── Corner brackets ──────────────────────────────────── */
+    .corner {
+      position: fixed; width: 28px; height: 28px; z-index: 800; pointer-events: none;
+      border-color: rgba(255,26,26,.18);
+    }
+    .corner-tl { top: 62px; left: 0; border-top: 1px solid; border-left: 1px solid; border-color: rgba(255,26,26,.18); }
+    .corner-tr { top: 62px; right: 0; border-top: 1px solid; border-right: 1px solid; border-color: rgba(255,26,26,.18); }
+
+    /* ── Loading indicator ────────────────────────────────── */
+    #loading {
+      position: fixed; top: 72px; left: 50%; transform: translateX(-50%);
+      z-index: 1500; display: flex; align-items: center; gap: 10px;
+      padding: 8px 18px; border-radius: 20px;
+      font: 400 9px/1 var(--font-m); letter-spacing: .2em; color: #888;
+      opacity: 0; transition: opacity .3s; pointer-events: none;
+    }
+    #loading.visible { opacity: 1; }
+    #loading-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); animation: ping .9s ease-in-out infinite; }
+    @keyframes ping { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.6);opacity:.4} }
+
+    /* ── Report modal ─────────────────────────────────────── */
+    #modal-overlay {
+      position: fixed; inset: 0; z-index: 2000;
+      background: rgba(0,0,0,.65); backdrop-filter: blur(5px);
+      display: flex; align-items: center; justify-content: center;
+      opacity: 0; pointer-events: none; transition: opacity .3s;
+    }
+    #modal-overlay.open { opacity: 1; pointer-events: auto; }
+    #modal {
+      width: 100%; max-width: 400px; margin: 0 16px;
+      border-radius: 5px; overflow: hidden;
+      border: 1px solid rgba(255,26,26,.3);
+      background: var(--panel); backdrop-filter: blur(16px);
+      transform: translateY(20px); transition: transform .35s cubic-bezier(.16,1,.3,1);
+    }
+    #modal-overlay.open #modal { transform: translateY(0); }
+    .modal-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 20px; border-bottom: 1px solid rgba(255,26,26,.12);
+    }
+    .modal-head-sub { font: 400 8px/1 var(--font-m); letter-spacing: .28em; color: rgba(255,26,26,.6); margin-bottom: 4px; }
+    .modal-head-title { font: 600 12px/1 var(--font-d); letter-spacing: .14em; color: #ddd; }
+    .modal-close { font: 400 16px/1 var(--font-m); color: #444; cursor: pointer; border: none; background: none; transition: color .2s; }
+    .modal-close:hover { color: var(--red); }
+    .modal-body { padding: 18px 20px; }
+
+    .form-field { margin-bottom: 14px; }
+    .form-label { font: 400 8px/1 var(--font-m); letter-spacing: .2em; color: var(--dim); text-transform: uppercase; margin-bottom: 6px; display: block; }
+    .form-input, .form-select, .form-textarea {
+      width: 100%; padding: 9px 12px; border-radius: 3px;
+      background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.08);
+      font: 400 11px/1 var(--font-m); color: #ccc;
+      outline: none; transition: border-color .2s;
+    }
+    .form-input:focus, .form-select:focus, .form-textarea:focus { border-color: rgba(255,26,26,.4); }
+    .form-input::placeholder, .form-textarea::placeholder { color: #333; }
+    .form-select { cursor: pointer; }
+    .form-select option { background: #111; }
+    .form-textarea { resize: none; height: 68px; }
+    .time-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .time-btn {
+      padding: 9px; border-radius: 3px; text-align: center;
+      font: 400 9px/1 var(--font-m); letter-spacing: .15em;
+      border: 1px solid rgba(255,255,255,.07); background: transparent;
+      color: var(--dim); cursor: pointer; transition: all .2s;
+    }
+    .time-btn.active { border-color: rgba(255,26,26,.45); background: rgba(255,26,26,.1); color: #cc7777; }
+    .submit-btn {
+      width: 100%; padding: 12px; border-radius: 3px; margin-top: 4px;
+      font: 400 10px/1 var(--font-m); letter-spacing: .22em; color: #ff9999;
+      border: 1px solid rgba(255,26,26,.4); background: rgba(255,26,26,.08);
+      cursor: pointer; transition: all .2s; text-transform: uppercase;
+    }
+    .submit-btn:hover { background: rgba(255,26,26,.18); border-color: rgba(255,26,26,.65); }
+
+    #submit-success {
+      display: none; padding: 30px 20px; text-align: center;
+    }
+    #submit-success .ss-icon { font-size: 36px; margin-bottom: 12px; }
+    #submit-success .ss-title { font: 600 11px/1 var(--font-d); letter-spacing: .2em; color: #44cc88; margin-bottom: 6px; }
+    #submit-success .ss-sub { font: 400 9px/1 var(--font-m); letter-spacing: .16em; color: var(--dim); }
+
+    /* ── Popup ────────────────────────────────────────────── */
+    .crime-popup .leaflet-popup-content-wrapper {
+      background: rgba(7,7,16,0.97) !important;
+      border: 1px solid rgba(255,26,26,.35) !important;
+      border-radius: 4px !important;
+      box-shadow: 0 0 20px rgba(255,26,26,.2), 0 0 40px rgba(255,100,0,.08) !important;
+      padding: 0 !important;
+    }
+    .crime-popup .leaflet-popup-content { margin: 0 !important; }
+    .crime-popup .leaflet-popup-tip { background: rgba(7,7,16,.97) !important; }
+    .leaflet-popup-close-button { color: #ff4444 !important; font-size: 16px !important; top: 5px !important; right: 8px !important; }
+    .popup-head { padding: 10px 14px 8px; border-bottom: 1px solid rgba(255,255,255,.05); }
+    .popup-eyebrow { font: 300 8px/1 var(--font-m); letter-spacing: .22em; color: #444; margin-bottom: 6px; }
+    .popup-type { display: flex; align-items: center; gap: 8px; }
+    .popup-type-label { font: 600 13px/1 var(--font-m); letter-spacing: .08em; }
+    .popup-live-badge {
+      font: 400 7px/1 var(--font-m); letter-spacing: .15em;
+      padding: 2px 6px; border-radius: 2px;
+      border: 1px solid rgba(255,26,26,.4); background: rgba(255,26,26,.12);
+      color: #ff6666; margin-left: auto;
+    }
+    .popup-body { padding: 10px 14px 12px; font-family: var(--font-m); }
+    .popup-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+    .popup-row-label { font-size: 8px; letter-spacing: .2em; color: #3a3a4a; }
+    .popup-row-value { font-size: 10px; color: #bbb; text-align: right; }
+    .popup-row-value.dim { color: #555; font-size: 9px; }
+    .popup-intensity-label { display: flex; justify-content: space-between; font-size: 8px; letter-spacing: .18em; color: #444; margin-top: 10px; margin-bottom: 4px; }
+    .popup-bar-track { height: 3px; background: #10101e; border-radius: 2px; }
+    .popup-bar-fill { height: 100%; border-radius: 2px; }
+
+    /* ── Leaflet zoom ─────────────────────────────────────── */
+    .leaflet-control-zoom { border: none !important; }
+    .leaflet-control-zoom a {
+      background: rgba(8,8,18,.9) !important;
+      border: 1px solid rgba(255,26,26,.2) !important;
+      color: var(--red) !important;
+      font-family: var(--font-d) !important;
+      backdrop-filter: blur(8px);
+    }
+    .leaflet-control-zoom a:hover { background: rgba(255,26,26,.1) !important; }
+    .leaflet-control-attribution { background: rgba(5,5,12,.6) !important; color: #222 !important; font-size: 7px !important; }
+    .leaflet-control-attribution a { color: #333 !important; }
+
+    /* ── Keyframes ────────────────────────────────────────── */
+    @keyframes livePulse {
+      0%,100% { box-shadow: 0 0 4px 2px rgba(255,26,26,.75); }
+      50%      { box-shadow: 0 0 10px 4px rgba(255,26,26,.2); }
+    }
+    @keyframes radarPing {
+      0%   { transform: scale(.85); opacity: .9; }
+      100% { transform: scale(2.4); opacity: 0; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Map ──────────────────────────────────────────────── -->
+<div id="map"></div>
+<div id="scanline"></div>
+
+<!-- ── Top Bar ──────────────────────────────────────────── -->
+<div id="topbar" class="glass">
+  <div id="logo-area">
+    <div class="radar-wrap">
+      <div class="radar-ring"></div>
+      <div class="radar-ring"></div>
+      <div class="radar-dot"></div>
+      <div class="radar-ping"></div>
+    </div>
+    <div>
+      <div class="logo-sub">CRIME INTEL</div>
+      <div class="logo-main">NAGPUR<span>.</span></div>
+    </div>
+  </div>
+
+  <div id="stats-area" class="glass" style="border:none; border-radius:0;">
+    <div class="stat-badge">
+      <div class="stat-label">Total Incidents</div>
+      <div class="stat-value red" id="stat-total">—</div>
+    </div>
+    <div class="vdiv"></div>
+    <div class="stat-badge">
+      <div class="stat-label">Hotspot Zone</div>
+      <div class="stat-value amber" id="stat-zone">—</div>
+    </div>
+    <div class="vdiv"></div>
+    <div class="stat-badge">
+      <div class="stat-label">Night Crimes</div>
+      <div class="stat-value gold" id="stat-night">—</div>
+    </div>
+    <div class="vdiv"></div>
+    <button id="live-btn" onclick="toggleLive()">
+      <span class="live-dot"></span>
+      <span id="live-label">LIVE TRACKING</span>
+    </button>
+  </div>
+
+  <div id="clock-area" class="glass" style="border:none; border-radius:0;">
+    <div class="time-filter-group" id="tf-group">
+      <button class="tf-btn active" data-tf="all"    onclick="setTimeFilter('all')">ALL</button>
+      <button class="tf-btn"        data-tf="day"    onclick="setTimeFilter('day')">☀ DAY</button>
+      <button class="tf-btn"        data-tf="night"  onclick="setTimeFilter('night')">🌙 NIGHT</button>
+    </div>
+    <div class="clock">
+      <div class="clock-time" id="clock-time">00:00:00</div>
+      <div class="clock-date" id="clock-date">—</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Left Panel ────────────────────────────────────────── -->
+<div id="left-panel" class="glass">
+  <div class="panel-header">
+    <div class="panel-header-sub">◈ Intelligence Filters</div>
+    <div class="panel-header-title">Refine crime data layers</div>
+  </div>
+  <div class="panel-body">
+    <div class="section-title">Crime Category</div>
+    <div id="crime-type-list"></div>
+
+    <div class="section-title">Time Period</div>
+    <div class="time-grid">
+      <button class="time-card active" data-t="all"   onclick="setTimeFilter('all')">
+        <span class="tc-icon">◈</span><span class="tc-label">ALL</span>
+      </button>
+      <button class="time-card" data-t="day"   onclick="setTimeFilter('day')">
+        <span class="tc-icon">☀</span><span class="tc-label">DAY</span>
+      </button>
+      <button class="time-card" data-t="night" onclick="setTimeFilter('night')">
+        <span class="tc-icon">🌙</span><span class="tc-label">NIGHT</span>
+      </button>
+    </div>
+
+    <div class="section-title" style="margin-top:22px;">Top Affected Areas</div>
+    <div id="area-breakdown"></div>
+
+    <div class="section-title" style="margin-top:22px;">Heatmap Intensity</div>
+    <div class="legend-gradient"></div>
+    <div class="legend-labels"><span>LOW</span><span>MODERATE</span><span>HIGH</span></div>
+  </div>
+  <div class="panel-footer">NAGPUR POLICE ANALYTICS · DEMO v1.0</div>
+</div>
+
+<!-- ── Bottom Bar ─────────────────────────────────────────── -->
+<div id="bottombar">
+  <div class="bottom-info glass">
+    <div class="live-dot" style="width:6px;height:6px;flex-shrink:0;"></div>
+    <span class="bottom-info-text">SHOWING <b id="bb-count">—</b> INCIDENTS</span>
+    <span style="width:1px;height:14px;background:rgba(255,26,26,.12);display:inline-block;"></span>
+    <span class="bottom-info-text" style="color:#2a2a3a;">21.1458°N · 79.0882°E · NAGPUR</span>
+  </div>
+  <span class="bottom-tip">CLICK HOTSPOT TO INSPECT · SCROLL TO ZOOM</span>
+  <div class="bottom-actions">
+    <button class="btn-layers" onclick="togglePanel()">⊞ LAYERS</button>
+    <button class="btn-report" onclick="openModal()">
+      <span class="btn-report-icon">＋</span> REPORT CRIME
+    </button>
+  </div>
+</div>
+
+<!-- ── Corner Brackets ────────────────────────────────────── -->
+<div class="corner corner-tl"></div>
+<div class="corner corner-tr"></div>
+
+<!-- ── Loading ────────────────────────────────────────────── -->
+<div id="loading" class="glass">
+  <div id="loading-dot"></div>
+  <span>SYNCING DATA</span>
+</div>
+
+<!-- ── Report Modal ───────────────────────────────────────── -->
+<div id="modal-overlay" onclick="handleOverlayClick(event)">
+  <div id="modal">
+    <div class="modal-head">
+      <div>
+        <div class="modal-head-sub">◈ Report Incident</div>
+        <div class="modal-head-title">SUBMIT CRIME REPORT</div>
+      </div>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div id="modal-body-form" class="modal-body">
+      <div class="form-field">
+        <label class="form-label">Area / Locality</label>
+        <input class="form-input" id="f-area" type="text" placeholder="e.g. Sitabuldi, Sadar..." />
+      </div>
+      <div class="form-field">
+        <label class="form-label">Crime Type</label>
+        <select class="form-select" id="f-type">
+          <option>Theft</option><option>Assault</option>
+          <option>Robbery</option><option>Snatching</option><option>Vandalism</option>
+        </select>
+      </div>
+      <div class="form-field">
+        <label class="form-label">Time of Incident</label>
+        <div class="time-btns">
+          <button class="time-btn active" id="tb-day"   onclick="selectTime('day')">☀ DAY</button>
+          <button class="time-btn"        id="tb-night" onclick="selectTime('night')">🌙 NIGHT</button>
+        </div>
+      </div>
+      <div class="form-field">
+        <label class="form-label">Description (Optional)</label>
+        <textarea class="form-textarea" id="f-desc" placeholder="Brief description of the incident..."></textarea>
+      </div>
+      <button class="submit-btn" onclick="submitReport()">◈ SUBMIT REPORT</button>
+    </div>
+    <div id="submit-success">
+      <div class="ss-icon">✅</div>
+      <div class="ss-title">REPORT SUBMITTED</div>
+      <div class="ss-sub" style="margin-top:6px;">Incident logged to database</div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════ -->
+<script>
+/* ──────────────────────────────────────────────────────────
+   EMBEDDED DATASET  (115 crime points across Nagpur)
+─────────────────────────────────────────────────────────── */
+const ALL_CRIMES = [
+  {id:1,lat:21.1458,lng:79.0882,intensity:.9,type:"Robbery",time:"night",area:"Sitabuldi"},
+  {id:2,lat:21.1487,lng:79.0856,intensity:.85,type:"Theft",time:"night",area:"Sitabuldi"},
+  {id:3,lat:21.1501,lng:79.0901,intensity:.80,type:"Assault",time:"night",area:"Sitabuldi"},
+  {id:4,lat:21.1465,lng:79.0870,intensity:.75,type:"Theft",time:"day",area:"Sitabuldi"},
+  {id:5,lat:21.1440,lng:79.0895,intensity:.88,type:"Snatching",time:"night",area:"Sitabuldi"},
+  {id:6,lat:21.1523,lng:79.0723,intensity:.78,type:"Theft",time:"day",area:"Dharampeth"},
+  {id:7,lat:21.1545,lng:79.0745,intensity:.65,type:"Assault",time:"night",area:"Dharampeth"},
+  {id:8,lat:21.1512,lng:79.0712,intensity:.70,type:"Robbery",time:"night",area:"Dharampeth"},
+  {id:9,lat:21.1498,lng:79.0734,intensity:.60,type:"Snatching",time:"day",area:"Dharampeth"},
+  {id:10,lat:21.1534,lng:79.0756,intensity:.55,type:"Vandalism",time:"night",area:"Dharampeth"},
+  {id:11,lat:21.1389,lng:79.0812,intensity:.82,type:"Theft",time:"night",area:"Sadar"},
+  {id:12,lat:21.1412,lng:79.0834,intensity:.77,type:"Robbery",time:"night",area:"Sadar"},
+  {id:13,lat:21.1367,lng:79.0789,intensity:.72,type:"Assault",time:"day",area:"Sadar"},
+  {id:14,lat:21.1378,lng:79.0845,intensity:.68,type:"Snatching",time:"night",area:"Sadar"},
+  {id:15,lat:21.1401,lng:79.0801,intensity:.65,type:"Theft",time:"day",area:"Sadar"},
+  {id:16,lat:21.1267,lng:79.0567,intensity:.73,type:"Theft",time:"day",area:"Manish Nagar"},
+  {id:17,lat:21.1289,lng:79.0589,intensity:.68,type:"Assault",time:"night",area:"Manish Nagar"},
+  {id:18,lat:21.1245,lng:79.0545,intensity:.62,type:"Robbery",time:"night",area:"Manish Nagar"},
+  {id:19,lat:21.1301,lng:79.0612,intensity:.57,type:"Snatching",time:"day",area:"Manish Nagar"},
+  {id:20,lat:21.1278,lng:79.0578,intensity:.51,type:"Vandalism",time:"night",area:"Manish Nagar"},
+  {id:21,lat:21.1623,lng:79.0934,intensity:.88,type:"Theft",time:"night",area:"Civil Lines"},
+  {id:22,lat:21.1645,lng:79.0956,intensity:.83,type:"Robbery",time:"night",area:"Civil Lines"},
+  {id:23,lat:21.1601,lng:79.0912,intensity:.79,type:"Assault",time:"day",area:"Civil Lines"},
+  {id:24,lat:21.1634,lng:79.0978,intensity:.74,type:"Snatching",time:"night",area:"Civil Lines"},
+  {id:25,lat:21.1612,lng:79.0945,intensity:.69,type:"Theft",time:"day",area:"Civil Lines"},
+  {id:26,lat:21.1156,lng:79.0723,intensity:.71,type:"Theft",time:"day",area:"Bajaj Nagar"},
+  {id:27,lat:21.1178,lng:79.0745,intensity:.66,type:"Assault",time:"night",area:"Bajaj Nagar"},
+  {id:28,lat:21.1134,lng:79.0701,intensity:.61,type:"Robbery",time:"night",area:"Bajaj Nagar"},
+  {id:29,lat:21.1167,lng:79.0767,intensity:.56,type:"Snatching",time:"day",area:"Bajaj Nagar"},
+  {id:30,lat:21.1145,lng:79.0734,intensity:.52,type:"Vandalism",time:"night",area:"Bajaj Nagar"},
+  {id:31,lat:21.1723,lng:79.0823,intensity:.76,type:"Theft",time:"night",area:"Ramdaspeth"},
+  {id:32,lat:21.1745,lng:79.0845,intensity:.71,type:"Robbery",time:"night",area:"Ramdaspeth"},
+  {id:33,lat:21.1701,lng:79.0801,intensity:.67,type:"Assault",time:"day",area:"Ramdaspeth"},
+  {id:34,lat:21.1734,lng:79.0867,intensity:.62,type:"Snatching",time:"night",area:"Ramdaspeth"},
+  {id:35,lat:21.1712,lng:79.0834,intensity:.58,type:"Theft",time:"day",area:"Ramdaspeth"},
+  {id:36,lat:21.1034,lng:79.0456,intensity:.79,type:"Theft",time:"night",area:"Hingna"},
+  {id:37,lat:21.1056,lng:79.0478,intensity:.74,type:"Robbery",time:"night",area:"Hingna"},
+  {id:38,lat:21.1012,lng:79.0434,intensity:.69,type:"Assault",time:"day",area:"Hingna"},
+  {id:39,lat:21.1045,lng:79.0501,intensity:.64,type:"Snatching",time:"night",area:"Hingna"},
+  {id:40,lat:21.1023,lng:79.0467,intensity:.59,type:"Vandalism",time:"night",area:"Hingna"},
+  {id:41,lat:21.1867,lng:79.0923,intensity:.73,type:"Theft",time:"day",area:"Kamptee Road"},
+  {id:42,lat:21.1889,lng:79.0945,intensity:.68,type:"Assault",time:"night",area:"Kamptee Road"},
+  {id:43,lat:21.1845,lng:79.0901,intensity:.63,type:"Robbery",time:"night",area:"Kamptee Road"},
+  {id:44,lat:21.1878,lng:79.0967,intensity:.58,type:"Snatching",time:"day",area:"Kamptee Road"},
+  {id:45,lat:21.1856,lng:79.0934,intensity:.53,type:"Theft",time:"night",area:"Kamptee Road"},
+  {id:46,lat:21.1234,lng:79.1056,intensity:.81,type:"Theft",time:"night",area:"Nagpur Railway Station"},
+  {id:47,lat:21.1256,lng:79.1078,intensity:.86,type:"Robbery",time:"night",area:"Nagpur Railway Station"},
+  {id:48,lat:21.1212,lng:79.1034,intensity:.91,type:"Snatching",time:"night",area:"Nagpur Railway Station"},
+  {id:49,lat:21.1245,lng:79.1101,intensity:.76,type:"Assault",time:"day",area:"Nagpur Railway Station"},
+  {id:50,lat:21.1223,lng:79.1067,intensity:.71,type:"Theft",time:"night",area:"Nagpur Railway Station"},
+  {id:51,lat:21.1556,lng:79.1123,intensity:.77,type:"Theft",time:"day",area:"Lakadganj"},
+  {id:52,lat:21.1578,lng:79.1145,intensity:.72,type:"Assault",time:"night",area:"Lakadganj"},
+  {id:53,lat:21.1534,lng:79.1101,intensity:.67,type:"Robbery",time:"night",area:"Lakadganj"},
+  {id:54,lat:21.1567,lng:79.1167,intensity:.62,type:"Snatching",time:"day",area:"Lakadganj"},
+  {id:55,lat:21.1545,lng:79.1134,intensity:.57,type:"Vandalism",time:"night",area:"Lakadganj"},
+  {id:56,lat:21.1089,lng:79.1234,intensity:.74,type:"Theft",time:"night",area:"Nandanvan"},
+  {id:57,lat:21.1112,lng:79.1256,intensity:.69,type:"Robbery",time:"night",area:"Nandanvan"},
+  {id:58,lat:21.1067,lng:79.1212,intensity:.64,type:"Assault",time:"day",area:"Nandanvan"},
+  {id:59,lat:21.1101,lng:79.1278,intensity:.59,type:"Snatching",time:"night",area:"Nandanvan"},
+  {id:60,lat:21.1078,lng:79.1245,intensity:.54,type:"Vandalism",time:"night",area:"Nandanvan"},
+  {id:61,lat:21.1789,lng:79.0634,intensity:.76,type:"Theft",time:"day",area:"Wardha Road"},
+  {id:62,lat:21.1812,lng:79.0656,intensity:.71,type:"Assault",time:"night",area:"Wardha Road"},
+  {id:63,lat:21.1767,lng:79.0612,intensity:.66,type:"Robbery",time:"night",area:"Wardha Road"},
+  {id:64,lat:21.1801,lng:79.0678,intensity:.61,type:"Snatching",time:"day",area:"Wardha Road"},
+  {id:65,lat:21.1778,lng:79.0645,intensity:.56,type:"Theft",time:"night",area:"Wardha Road"},
+  {id:66,lat:21.0956,lng:79.0856,intensity:.78,type:"Theft",time:"night",area:"Ajni"},
+  {id:67,lat:21.0978,lng:79.0878,intensity:.73,type:"Robbery",time:"night",area:"Ajni"},
+  {id:68,lat:21.0934,lng:79.0834,intensity:.68,type:"Assault",time:"day",area:"Ajni"},
+  {id:69,lat:21.0967,lng:79.0901,intensity:.63,type:"Snatching",time:"night",area:"Ajni"},
+  {id:70,lat:21.0945,lng:79.0867,intensity:.58,type:"Vandalism",time:"night",area:"Ajni"},
+  {id:71,lat:21.1634,lng:79.1234,intensity:.72,type:"Theft",time:"day",area:"Itwari"},
+  {id:72,lat:21.1656,lng:79.1256,intensity:.87,type:"Robbery",time:"night",area:"Itwari"},
+  {id:73,lat:21.1612,lng:79.1212,intensity:.82,type:"Assault",time:"night",area:"Itwari"},
+  {id:74,lat:21.1645,lng:79.1278,intensity:.77,type:"Snatching",time:"night",area:"Itwari"},
+  {id:75,lat:21.1623,lng:79.1245,intensity:.62,type:"Theft",time:"day",area:"Itwari"},
+  {id:76,lat:21.0856,lng:79.0534,intensity:.69,type:"Theft",time:"day",area:"Hinganghat Road"},
+  {id:77,lat:21.0878,lng:79.0556,intensity:.64,type:"Assault",time:"night",area:"Hinganghat Road"},
+  {id:78,lat:21.0834,lng:79.0512,intensity:.59,type:"Robbery",time:"night",area:"Hinganghat Road"},
+  {id:79,lat:21.0867,lng:79.0578,intensity:.54,type:"Snatching",time:"day",area:"Hinganghat Road"},
+  {id:80,lat:21.0845,lng:79.0545,intensity:.49,type:"Vandalism",time:"night",area:"Hinganghat Road"},
+  {id:81,lat:21.1923,lng:79.1056,intensity:.75,type:"Theft",time:"night",area:"Kalamna"},
+  {id:82,lat:21.1945,lng:79.1078,intensity:.70,type:"Robbery",time:"night",area:"Kalamna"},
+  {id:83,lat:21.1901,lng:79.1034,intensity:.65,type:"Assault",time:"day",area:"Kalamna"},
+  {id:84,lat:21.1934,lng:79.1101,intensity:.60,type:"Snatching",time:"night",area:"Kalamna"},
+  {id:85,lat:21.1912,lng:79.1067,intensity:.55,type:"Theft",time:"night",area:"Kalamna"},
+  {id:86,lat:21.1156,lng:79.0312,intensity:.67,type:"Theft",time:"day",area:"Koradi"},
+  {id:87,lat:21.1178,lng:79.0334,intensity:.62,type:"Assault",time:"night",area:"Koradi"},
+  {id:88,lat:21.1134,lng:79.0290,intensity:.57,type:"Robbery",time:"night",area:"Koradi"},
+  {id:89,lat:21.1167,lng:79.0356,intensity:.52,type:"Snatching",time:"day",area:"Koradi"},
+  {id:90,lat:21.1145,lng:79.0323,intensity:.47,type:"Vandalism",time:"night",area:"Koradi"},
+  {id:91,lat:21.1345,lng:79.1234,intensity:.71,type:"Theft",time:"night",area:"Butibori"},
+  {id:92,lat:21.1367,lng:79.1256,intensity:.66,type:"Robbery",time:"night",area:"Butibori"},
+  {id:93,lat:21.1323,lng:79.1212,intensity:.61,type:"Assault",time:"day",area:"Butibori"},
+  {id:94,lat:21.1356,lng:79.1278,intensity:.56,type:"Snatching",time:"night",area:"Butibori"},
+  {id:95,lat:21.1334,lng:79.1245,intensity:.51,type:"Theft",time:"night",area:"Butibori"},
+  {id:96,lat:21.1523,lng:79.0423,intensity:.74,type:"Theft",time:"day",area:"Wadi"},
+  {id:97,lat:21.1545,lng:79.0445,intensity:.69,type:"Assault",time:"night",area:"Wadi"},
+  {id:98,lat:21.1501,lng:79.0401,intensity:.64,type:"Robbery",time:"night",area:"Wadi"},
+  {id:99,lat:21.1534,lng:79.0467,intensity:.59,type:"Snatching",time:"day",area:"Wadi"},
+  {id:100,lat:21.1512,lng:79.0434,intensity:.54,type:"Vandalism",time:"night",area:"Wadi"},
+  {id:101,lat:21.1312,lng:79.0923,intensity:.84,type:"Theft",time:"night",area:"Gandhibagh"},
+  {id:102,lat:21.1334,lng:79.0945,intensity:.79,type:"Robbery",time:"night",area:"Gandhibagh"},
+  {id:103,lat:21.1290,lng:79.0901,intensity:.74,type:"Assault",time:"day",area:"Gandhibagh"},
+  {id:104,lat:21.1323,lng:79.0967,intensity:.69,type:"Snatching",time:"night",area:"Gandhibagh"},
+  {id:105,lat:21.1301,lng:79.0934,intensity:.64,type:"Theft",time:"day",area:"Gandhibagh"},
+  {id:106,lat:21.1712,lng:79.1034,intensity:.77,type:"Theft",time:"night",area:"Sakkardara"},
+  {id:107,lat:21.1734,lng:79.1056,intensity:.72,type:"Robbery",time:"night",area:"Sakkardara"},
+  {id:108,lat:21.1690,lng:79.1012,intensity:.67,type:"Assault",time:"day",area:"Sakkardara"},
+  {id:109,lat:21.1723,lng:79.1078,intensity:.62,type:"Snatching",time:"night",area:"Sakkardara"},
+  {id:110,lat:21.1701,lng:79.1045,intensity:.57,type:"Vandalism",time:"night",area:"Sakkardara"},
+  {id:111,lat:21.1058,lng:79.0678,intensity:.80,type:"Theft",time:"night",area:"Pratap Nagar"},
+  {id:112,lat:21.1080,lng:79.0700,intensity:.75,type:"Robbery",time:"night",area:"Pratap Nagar"},
+  {id:113,lat:21.1036,lng:79.0656,intensity:.70,type:"Assault",time:"day",area:"Pratap Nagar"},
+  {id:114,lat:21.1069,lng:79.0723,intensity:.65,type:"Snatching",time:"night",area:"Pratap Nagar"},
+  {id:115,lat:21.1047,lng:79.0690,intensity:.60,type:"Theft",time:"night",area:"Pratap Nagar"},
+];
+
+/* ── Constants ─────────────────────────────────────────── */
+const CRIME_COLORS = {
+  Theft:"#ffd700", Assault:"#ff6600", Robbery:"#ff1a1a",
+  Snatching:"#ff8800", Vandalism:"#cc44ff"
+};
+const CRIME_ICONS  = {
+  Theft:"💰", Assault:"⚡", Robbery:"🔴", Snatching:"👜", Vandalism:"🔧"
+};
+const CRIME_TYPES  = ["Theft","Assault","Robbery","Snatching","Vandalism"];
+
+/* ── State ─────────────────────────────────────────────── */
+let state = { crimeType:"all", timeFilter:"all", isLive:true };
+let heatLayer = null, markersLayer = null, map = null;
+let liveTimer = null;
+let reportTime = "day";
+
+/* ── Init map ──────────────────────────────────────────── */
+window.addEventListener("DOMContentLoaded", () => {
+  map = L.map("map", {
+    center:[21.1458,79.0882], zoom:13,
+    zoomControl:false, attributionControl:false
+  });
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",{
+    subdomains:"abcd", maxZoom:19,
+    attribution:'&copy; OSM contributors &copy; CARTO'
+  }).addTo(map);
+  L.control.zoom({ position:"topright" }).addTo(map);
+  L.control.attribution({ position:"bottomleft", prefix:false }).addTo(map);
+
+  markersLayer = L.layerGroup().addTo(map);
+
+  buildCrimeTypeList();
+  startClock();
+  renderAll();
+  startLiveTimer();
+});
+
+/* ── Clock ─────────────────────────────────────────────── */
+function startClock() {
+  function tick() {
+    const now = new Date();
+    document.getElementById("clock-time").textContent =
+      now.toLocaleTimeString("en-IN",{hour12:false});
+    document.getElementById("clock-date").textContent =
+      now.toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"});
+  }
+  tick(); setInterval(tick,1000);
+}
+
+/* ── Build crime type buttons ──────────────────────────── */
+function buildCrimeTypeList() {
+  const container = document.getElementById("crime-type-list");
+  const counts = {};
+  ALL_CRIMES.forEach(c => counts[c.type] = (counts[c.type]||0)+1);
+
+  const allBtn = makeTypeBtn("All","◈","#aaa","all",true);
+  container.appendChild(allBtn);
+  CRIME_TYPES.forEach(t => {
+    container.appendChild(makeTypeBtn(t, CRIME_ICONS[t]||"◉", CRIME_COLORS[t]||"#aaa", t, false, counts[t]||0));
+  });
+}
+
+function makeTypeBtn(label, icon, color, val, active, count=0) {
+  const btn = document.createElement("button");
+  btn.className = "crime-btn" + (active?" active":"");
+  btn.dataset.ct = val;
+  btn.innerHTML = `
+    <span class="cb-icon">${icon}</span>
+    <span class="cb-label">${label.toUpperCase()}</span>
+    ${count ? `<span class="cb-count">${count}</span>` : ""}
+    ${active ? `<span class="cb-dot"></span>` : ""}
+  `;
+  btn.onclick = () => setCrimeType(val);
+  return btn;
+}
+
+/* ── Filters ───────────────────────────────────────────── */
+function setCrimeType(val) {
+  state.crimeType = val;
+  document.querySelectorAll(".crime-btn").forEach(b => {
+    const isActive = b.dataset.ct === val;
+    b.classList.toggle("active", isActive);
+    const dot = b.querySelector(".cb-dot");
+    if (isActive && !dot) {
+      const d = document.createElement("span"); d.className="cb-dot";
+      b.appendChild(d);
+    } else if (!isActive && dot) dot.remove();
+  });
+  renderAll();
+}
+
+function setTimeFilter(val) {
+  state.timeFilter = val;
+  // top bar buttons
+  document.querySelectorAll(".tf-btn").forEach(b => b.classList.toggle("active", b.dataset.tf===val));
+  // left panel cards
+  document.querySelectorAll(".time-card").forEach(b => b.classList.toggle("active", b.dataset.t===val));
+  renderAll();
+}
+
+function toggleLive() {
+  state.isLive = !state.isLive;
+  const btn = document.getElementById("live-btn");
+  const label = document.getElementById("live-label");
+  btn.classList.toggle("off", !state.isLive);
+  label.textContent = state.isLive ? "LIVE TRACKING" : "TRACKING OFF";
+  if (state.isLive) startLiveTimer(); else { clearInterval(liveTimer); liveTimer=null; }
+  renderAll();
+}
+
+function startLiveTimer() {
+  clearInterval(liveTimer);
+  liveTimer = setInterval(renderAll, 30000);
+}
+
+function togglePanel() {
+  document.getElementById("left-panel").classList.toggle("hidden");
+}
+
+/* ── Get filtered crimes ───────────────────────────────── */
+function getFilteredCrimes() {
+  let crimes = [...ALL_CRIMES];
+
+  // Add 5 simulated live incidents
+  if (state.isLive) {
+    const liveAreas = ["Sitabuldi","Itwari","Nagpur Railway Station","Sadar","Civil Lines"];
+    const liveTypes = ["Theft","Assault","Robbery","Snatching"];
+    for (let i=0;i<5;i++) {
+      const base = crimes[Math.floor(Math.random()*crimes.length)];
+      crimes.push({
+        id:2000+i, live:true,
+        lat: base.lat + (Math.random()-.5)*.008,
+        lng: base.lng + (Math.random()-.5)*.008,
+        intensity: .6 + Math.random()*.4,
+        type: liveTypes[Math.floor(Math.random()*liveTypes.length)],
+        time: Math.random()>.5?"night":"day",
+        area: liveAreas[Math.floor(Math.random()*liveAreas.length)]
+      });
+    }
+  }
+
+  if (state.crimeType !== "all")
+    crimes = crimes.filter(c => c.type.toLowerCase() === state.crimeType.toLowerCase());
+  if (state.timeFilter !== "all")
+    crimes = crimes.filter(c => c.time === state.timeFilter);
+
+  return crimes;
+}
+
+/* ── Compute stats ─────────────────────────────────────── */
+function computeStats(crimes) {
+  const areaCounts = {};
+  ALL_CRIMES.forEach(c => areaCounts[c.area] = (areaCounts[c.area]||0)+1);
+  const sorted = Object.entries(areaCounts).sort((a,b)=>b[1]-a[1]);
+  const nightCount = ALL_CRIMES.filter(c=>c.time==="night").length;
+  return { total:crimes.length, topArea:sorted[0]?.[0]||"—", nightCount, areaSorted:sorted };
+}
+
+/* ── Render everything ─────────────────────────────────── */
+function renderAll() {
+  showLoading(true);
+  setTimeout(() => {
+    const crimes = getFilteredCrimes();
+    const stats  = computeStats(crimes);
+    updateStats(stats);
+    renderHeatmap(crimes);
+    renderMarkers(crimes);
+    renderAreaBreakdown(stats.areaSorted);
+    showLoading(false);
+  }, 200);
+}
+
+function showLoading(v) {
+  document.getElementById("loading").classList.toggle("visible",v);
+}
+
+/* ── Update stat bar ───────────────────────────────────── */
+function updateStats(stats) {
+  document.getElementById("stat-total").textContent  = stats.total;
+  document.getElementById("stat-zone").textContent   = stats.topArea;
+  document.getElementById("stat-night").textContent  = stats.nightCount;
+  document.getElementById("bb-count").textContent    = stats.total;
+}
+
+/* ── Heatmap ───────────────────────────────────────────── */
+function renderHeatmap(crimes) {
+  if (heatLayer) map.removeLayer(heatLayer);
+  if (!crimes.length) return;
+
+  const pts = crimes.map(c => [c.lat, c.lng, c.intensity]);
+  heatLayer = L.heatLayer(pts, {
+    radius: 38, blur: 28, maxZoom: 18, max: 1.0,
+    minOpacity: 0.3,
+    gradient: {
+      0.00: "#0040ff",
+      0.25: "#00bbff",
+      0.45: "#00ffaa",
+      0.60: "#aaff00",
+      0.72: "#ffff00",
+      0.83: "#ff8800",
+      0.93: "#ff3300",
+      1.00: "#ff0000"
+    }
+  }).addTo(map);
+}
+
+/* ── Markers ───────────────────────────────────────────── */
+function renderMarkers(crimes) {
+  markersLayer.clearLayers();
+  crimes.forEach(c => {
+    const col = CRIME_COLORS[c.type] || "#ff4444";
+    const icon = L.divIcon({
+      html: `<div style="
+        width:9px;height:9px;border-radius:50%;
+        background:${col};
+        border:1.5px solid ${col}bb;
+        box-shadow:0 0 6px ${col}99,0 0 14px ${col}44;
+        cursor:pointer;
+      "></div>`,
+      className:"", iconSize:[9,9], iconAnchor:[4,4]
+    });
+    const m = L.marker([c.lat,c.lng],{icon, interactive:true});
+    m.bindPopup(buildPopup(c), { className:"crime-popup", maxWidth:260, offset:[0,-4] });
+    markersLayer.addLayer(m);
+  });
+}
+
+function buildPopup(c) {
+  const col = CRIME_COLORS[c.type]||"#ff4444";
+  const ico = CRIME_ICONS[c.type]||"⚠";
+  const pct = Math.round(c.intensity*100);
+  return `
+    <div style="font-family:'IBM Plex Mono',monospace;min-width:220px;">
+      <div class="popup-head" style="background:linear-gradient(135deg,${col}18,transparent);">
+        <div class="popup-eyebrow">INCIDENT REPORT</div>
+        <div class="popup-type">
+          <span style="font-size:18px">${ico}</span>
+          <span class="popup-type-label" style="color:${col}">${c.type.toUpperCase()}</span>
+          ${c.live?`<span class="popup-live-badge">LIVE</span>`:""}
+        </div>
+      </div>
+      <div class="popup-body">
+        <div class="popup-row">
+          <span class="popup-row-label">ZONE</span>
+          <span class="popup-row-value">${c.area}</span>
+        </div>
+        <div class="popup-row">
+          <span class="popup-row-label">PERIOD</span>
+          <span class="popup-row-value">${c.time==="night"?"🌙 Night":"☀ Day"}</span>
+        </div>
+        <div class="popup-row">
+          <span class="popup-row-label">COORDS</span>
+          <span class="popup-row-value dim">${c.lat.toFixed(4)}°N, ${c.lng.toFixed(4)}°E</span>
+        </div>
+        <div class="popup-intensity-label">
+          <span>THREAT LEVEL</span><span style="color:${col}">${pct}%</span>
+        </div>
+        <div class="popup-bar-track">
+          <div class="popup-bar-fill" style="
+            width:${pct}%;
+            background:linear-gradient(90deg,${col}88,${col});
+            box-shadow:0 0 6px ${col}55;
+          "></div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/* ── Area breakdown bars ───────────────────────────────── */
+function renderAreaBreakdown(sorted) {
+  const container = document.getElementById("area-breakdown");
+  container.innerHTML = "";
+  const top = sorted.slice(0,8);
+  const max = top[0]?.[1] || 1;
+  top.forEach(([area,count],i) => {
+    const pct = Math.round((count/max)*100);
+    const grad = i===0
+      ? "linear-gradient(90deg,#ff1a1a,#ff6600)"
+      : i<3 ? "linear-gradient(90deg,#ff6600,#ffd700)"
+            : "linear-gradient(90deg,#444,#666)";
+    const row = document.createElement("div");
+    row.className = "area-row";
+    row.innerHTML = `
+      <div class="area-row-header">
+        <span class="area-name">${area}</span>
+        <span class="area-count">${count}</span>
+      </div>
+      <div class="area-bar-track">
+        <div class="area-bar-fill" style="width:${pct}%;background:${grad};"></div>
+      </div>
+    `;
+    container.appendChild(row);
+  });
+}
+
+/* ── Report modal ──────────────────────────────────────── */
+function openModal()  { document.getElementById("modal-overlay").classList.add("open"); }
+function closeModal() { document.getElementById("modal-overlay").classList.remove("open"); }
+function handleOverlayClick(e) { if(e.target===document.getElementById("modal-overlay")) closeModal(); }
+function selectTime(t) {
+  reportTime = t;
+  document.getElementById("tb-day").classList.toggle("active",t==="day");
+  document.getElementById("tb-night").classList.toggle("active",t==="night");
+}
+function submitReport() {
+  document.getElementById("modal-body-form").style.display="none";
+  document.getElementById("submit-success").style.display="block";
+  setTimeout(()=>{
+    closeModal();
+    document.getElementById("modal-body-form").style.display="";
+    document.getElementById("submit-success").style.display="none";
+    document.getElementById("f-area").value="";
+    document.getElementById("f-desc").value="";
+  }, 2000);
+}
+</script>
+</body>
+</html>
