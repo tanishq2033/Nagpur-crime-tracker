@@ -1,4 +1,10 @@
-const BASE_URL = process.env.REACT_APP_API_URL || "http://localhost:8000";
+const API_URL = "https://nagpur-crime-tracker.onrender.com";
+
+import axios from "axios";
+
+export default axios.create({
+  baseURL: "https://nagpur-crime-tracker.onrender.com"
+});
 
 export async function fetchCrimes({ crimeType = "all", timeFilter = "all" } = {}) {
   const params = new URLSearchParams();
